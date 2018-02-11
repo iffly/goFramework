@@ -5,23 +5,38 @@ import (
 	"runtime"
 	"strconv"
 	"time"
+	"util"
 )
 
 func main() {
 	cpuNum := runtime.NumCPU()
 	runtime.GOMAXPROCS(cpuNum)
 
-	retChan := make(chan []Task)
-	f := NewProc(10*time.Second, retChan)
+	retChan := make(chan []interface{})
+	f := util.NewProc(10*time.Second, proc, retChan)
 	go f.Proc()
 
-	go input(f.inChan)
+	go input(f.InChan)
 	go output(retChan)
 
 	time.Sleep(120 * time.Second)
 }
 
-func input(inChan chan []Task) {
+type infoPriv struct {
+	name string
+}
+
+func proc(info interface{}) {
+	priv, ok := info.(infoPriv)
+	if !ok {
+		fmt.Println("sth err")
+		return
+	}
+
+	fmt.Println("proc priv", priv.name)
+}
+
+func input(inChan chan []util.Task) {
 	j := 0
 
 	for {
@@ -29,7 +44,7 @@ func input(inChan chan []Task) {
 		i := 0
 
 		for ; i < j+2; i++ {
-			inChan <- []Task{Task{name: "test_" + strconv.Itoa(i), ttl: int(time.Now().Unix()) + 20}}
+			inChan <- []util.Task{util.Task{Priv: infoPriv{name: "infoPrivTest_" + strconv.Itoa(i)}, Ttl: int(time.Now().Unix()) + 20}}
 			fmt.Println("input", i)
 		}
 		<-time.NewTimer(40 * time.Second).C
@@ -38,75 +53,20 @@ func input(inChan chan []Task) {
 	}
 }
 
-func output(outChan chan []Task) {
+func output(outChan chan []interface{}) {
 	for {
 		select {
 		case infos := <-outChan:
-			fmt.Println("output", infos)
+			for _, info := range infos {
+				one, ok := info.(infoPriv)
+				if !ok {
+					fmt.Println("sth err")
+					continue
+				}
+
+				fmt.Println("output", one)
+			}
+
 		}
 	}
-}
-
-type Tasks struct {
-	inChan  chan []Task
-	outChan chan []Task
-	invl    time.Duration
-	inputs  []Task
-}
-
-type Task struct {
-	name string
-	ttl  int
-}
-
-func NewProc(invl time.Duration, ret chan []Task) (fd *Tasks) {
-	return &Tasks{
-		inChan:  make(chan []Task, 10),
-		outChan: ret,
-		invl:    invl,
-		inputs:  make([]Task, 0),
-	}
-}
-
-func (f *Tasks) Proc() {
-	invl := time.NewTimer(f.invl).C
-
-	for {
-		select {
-		case infos := <-f.inChan:
-			mark := false
-			for _, new := range infos {
-				for _, old := range f.inputs {
-					if new == old {
-						mark = true
-						break
-					}
-				}
-				if false == mark {
-					f.inputs = append(f.inputs, new)
-				}
-				mark = false
-			}
-		case <-invl:
-			f.ProcDetail()
-			inputs := make([]Task, 0)
-			for _, info := range f.inputs {
-				tNow := int(time.Now().Unix())
-				if info.ttl > tNow {
-					inputs = append(inputs, info)
-				}
-			}
-			f.inputs = inputs
-			invl = time.NewTimer(f.invl).C
-		}
-	}
-}
-
-func (f *Tasks) ProcDetail() {
-	outputs := make([]Task, 0)
-	for _, info := range f.inputs {
-		fmt.Println("proc", time.Now().Unix(), info.name)
-		outputs = append(outputs, info)
-	}
-	f.outChan <- outputs
 }
